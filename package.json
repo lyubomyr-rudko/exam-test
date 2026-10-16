@@ -1,0 +1,7 @@
+{
+  "name": "exam-test",
+  "private": true,
+  "scripts": {
+    "serve": "npx serve"
+  }
+}
