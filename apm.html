@@ -15,6 +15,8 @@ button{width:100%;margin-top:18px;padding:14px 18px;border:0;border-radius:10px;
 button.secondary{background:#e8e8e8;color:#111}button:disabled{opacity:.5;cursor:default}
 .result{display:none;margin-top:18px;padding:16px;border-radius:10px;background:#f0f0f0}.result-title{font-size:22px;font-weight:700;margin-bottom:10px}
 .explanation{margin-top:14px;padding-top:14px;border-top:1px solid #ccc}.final{text-align:center}.final h1{font-size:36px}
+.star-button{width:auto;margin:0 0 12px;padding:8px 12px;font-size:16px}.star-button[aria-pressed="true"]{background:#fff1b8;color:#684b00}
+.exam-review{text-align:left;margin-top:28px}.exam-review h2{font-size:24px}.review-question{margin:16px 0;padding:16px;border:1px solid #ddd;border-radius:10px;overflow-wrap:anywhere}.review-question.failed{border-left:4px solid #b3261e}.review-question summary{cursor:pointer;font-weight:600}.review-question p{white-space:pre-wrap}.review-question .selected-answer{color:#b3261e}.review-question .correct-answer{color:#2f7d32}
 @media(max-width:600px){body{font-size:21px}main{padding:12px}.card{padding:18px}h1{font-size:25px}.status{font-size:14px}}
 </style>
 </head>
@@ -24,6 +26,7 @@ button.secondary{background:#e8e8e8;color:#111}button:disabled{opacity:.5;cursor
 <section class="card" id="examCard">
 <div class="meta" id="history"></div>
 <h1 id="question"></h1>
+<div id="questionReviewControl"></div>
 <div id="options"></div>
 <div class="result" id="result"></div>
 <button id="checkBtn">Check answer</button>
@@ -35,9 +38,11 @@ const EXAM = {"title":"Datadog APM and Distributed Tracing Fundamentals","questi
 const EXAM_SIZE = 90;
 const HISTORY_KEY = "datadog-apm-seen-v2";
 const ACTIVE_EXAM_KEY = "datadog-apm-active-exam-v2";
+const STARRED_KEY = "datadog-apm-starred-v1";
 const EXAM_STATE_PREFIX = "datadog-apm-exam-state-v2:";
 
 let askedHistory = new Set(readJson(HISTORY_KEY, []));
+let starredQuestions = new Set(readJson(STARRED_KEY, []));
 let examId = "";
 let questionIds = [];
 let examQuestions = [];
@@ -152,6 +157,7 @@ function showQuestion() {
   score.textContent = `Score: ${correctCount} / ${currentIndex}`;
   history.textContent = `${wasAskedBefore ? "Asked previously" : "New question"} · Seen overall: ${askedHistory.size} / ${EXAM.questionCount}`;
   question.textContent = `${q.id}. ${q.question}`;
+  document.getElementById("questionReviewControl").replaceChildren(createStarButton(q));
 
   const inputType = q.type === "multiple_choice" ? "checkbox" : "radio";
   options.innerHTML = "";
@@ -237,12 +243,101 @@ function showFinalScore() {
   examCard.className = "card final";
   examCard.innerHTML = `<h1>${correctCount} / ${examQuestions.length}</h1>
     <p>Your score: <strong>${percent}%</strong></p>
+    <p>${correctCount} correct · ${examQuestions.length - correctCount} incorrect · ${examQuestions.length} total</p>
     <p class="meta">Seen overall: ${askedHistory.size} / ${EXAM.questionCount} questions</p>
-    <button id="newExamBtn">Start new 90-question exam</button>
+    <div id="examReview" class="exam-review"></div>
+    <button id="newExamBtn">Start new ${EXAM_SIZE}-question exam</button>
     <div class="meta" style="margin-top:12px">Exam ID: ${examId}</div>`;
   currentIndex = examQuestions.length;
   saveState();
+  renderExamReview(document.getElementById("examReview"));
   document.getElementById("newExamBtn").onclick = startNewExam;
+}
+
+function createStarButton(q) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary star-button";
+  const update = () => {
+    const starred = starredQuestions.has(q.id);
+    button.textContent = starred ? "★ Starred for review" : "☆ Star for review";
+    button.setAttribute("aria-pressed", String(starred));
+    button.setAttribute("aria-label", `${starred ? "Unstar" : "Star"} question ${q.id} for review`);
+  };
+  update();
+  button.onclick = () => {
+    if (starredQuestions.has(q.id)) starredQuestions.delete(q.id);
+    else starredQuestions.add(q.id);
+    writeJson(STARRED_KEY, [...starredQuestions]);
+    update();
+    if (currentIndex >= examQuestions.length) {
+      renderExamReview(document.getElementById("examReview"));
+    }
+  };
+  return button;
+}
+
+function renderExamReview(container) {
+  container.replaceChildren();
+  const starred = examQuestions.filter(q => starredQuestions.has(q.id));
+  const starredHeading = document.createElement("h2");
+  starredHeading.textContent = `★ Starred questions (${starred.length})`;
+  container.appendChild(starredHeading);
+  if (!starred.length) {
+    const message = document.createElement("p");
+    message.textContent = "No questions starred in this exam. Use the star button on any question to mark it for review.";
+    container.appendChild(message);
+  }
+  starred.forEach(q => container.appendChild(createReviewQuestion(q, true)));
+
+  const failed = examQuestions.filter(q => !answers[q.id]?.isCorrect);
+  const heading = document.createElement("h2");
+  heading.textContent = `Failed questions (${failed.length})`;
+  container.appendChild(heading);
+
+  if (!failed.length) {
+    const message = document.createElement("p");
+    message.textContent = "You answered every question correctly!";
+    container.appendChild(message);
+  }
+  failed.forEach(q => container.appendChild(createReviewQuestion(q, true)));
+
+  const allReview = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = `Review all ${examQuestions.length} questions`;
+  allReview.appendChild(summary);
+  examQuestions.forEach(q => allReview.appendChild(createReviewQuestion(q, false)));
+  container.appendChild(allReview);
+}
+
+function createReviewQuestion(q, expanded) {
+  const answer = answers[q.id];
+  const isCorrect = Boolean(answer?.isCorrect);
+  const details = document.createElement("details");
+  details.className = `review-question${isCorrect ? "" : " failed"}`;
+  details.open = expanded;
+  const summary = document.createElement("summary");
+  summary.textContent = `${isCorrect ? "✓ Correct" : "✗ Incorrect"} · Question ${q.id}: ${q.question}`;
+  details.appendChild(summary);
+  details.appendChild(createStarButton(q));
+
+  const answerText = ids => ids.length ? ids.map(id => {
+    const option = q.options.find(o => o.id === id);
+    return `${id}. ${option ? option.text : "Unknown option"}`;
+  }).join("\n") : "No answer selected.";
+
+  const addText = (label, text, className) => {
+    const paragraph = document.createElement("p");
+    paragraph.className = className;
+    const title = document.createElement("strong");
+    title.textContent = label;
+    paragraph.append(title, document.createTextNode(`\n${text}`));
+    details.appendChild(paragraph);
+  };
+  addText("Your answer:", answerText(answer?.selected || []), isCorrect ? "" : "selected-answer");
+  addText("Correct answer:", answerText(q.correctAnswers), "correct-answer");
+  addText("Explanation:", q.answerExplanation?.trim() || "No explanation available.", "explanation");
+  return details;
 }
 
 function startNewExam() {
